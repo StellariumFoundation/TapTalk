@@ -1,0 +1,177 @@
+name: "Tap Talk Release"
+
+# TRIGGER CHANGE: Runs on 'master' branch commits AND 'v*' tags
+on:
+  push:
+    branches:
+      - 'master'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ========================================================
+  # 1. BUILD ANDROID (APK) & WEB (WASM) & LINUX (DEB)
+  # ========================================================
+  build-android-web-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '20'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # --- ANDROID ---
+      - name: Build Android APK
+        run: ./gradlew :composeApp:assembleDebug
+
+      - name: Rename APK
+        run: mv composeApp/build/outputs/apk/debug/composeApp-debug.apk taptalk-android.apk
+
+      # --- WEB (WASM) ---
+      - name: Build Web (Wasm)
+        run: ./gradlew :composeApp:wasmJsBrowserDistribution
+
+      - name: Zip Web Build
+        run: |
+          cd composeApp/build/dist/wasmJs/productionExecutable
+          zip -r ../../../../../taptalk-web-wasm.zip .
+
+      # --- LINUX DESKTOP ---
+      - name: Install Linux Deps
+        run: sudo apt-get update && sudo apt-get install -y binutils fakeroot
+
+      - name: Build Linux Deb
+        run: ./gradlew :composeApp:packageDistributionForCurrentOS
+
+      - name: Rename Linux Deb
+        run: mv composeApp/build/compose/binaries/main/deb/*.deb taptalk-linux.deb
+
+      # --- UPLOAD ARTIFACTS ---
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-linux
+          path: |
+            taptalk-android.apk
+            taptalk-web-wasm.zip
+            taptalk-linux.deb
+
+  # ========================================================
+  # 2. BUILD WINDOWS (EXE)
+  # ========================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '20'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Windows Exe
+        run: ./gradlew :composeApp:packageDistributionForCurrentOS
+
+      - name: Find and Move Exe
+        shell: bash
+        run: |
+          find composeApp/build/compose/binaries/main/exe -name "*.exe" -exec mv {} taptalk-windows.exe \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-windows
+          path: taptalk-windows.exe
+
+  # ========================================================
+  # 3. BUILD MAC (DMG) & iOS (IPA)
+  # ========================================================
+  build-apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '20'
+      - uses: gradle/actions/setup-gradle@v3
+
+      # --- MAC DESKTOP ---
+      - name: Build Mac DMG
+        run: ./gradlew :composeApp:packageDistributionForCurrentOS
+
+      - name: Move DMG
+        run: mv composeApp/build/compose/binaries/main/dmg/*.dmg taptalk-mac.dmg
+
+      # --- iOS (UNSIGNED) ---
+      - name: Build iOS App
+        run: |
+          ./gradlew :shared:linkReleaseFrameworkIosArm64
+          xcodebuild -project iosApp/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/ios/TapTalk.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean archive
+
+      - name: Package iOS IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/TapTalk.xcarchive/Products/Applications/iosApp.app Payload/
+          zip -r taptalk-ios-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-apple
+          path: |
+            taptalk-mac.dmg
+            taptalk-ios-unsigned.ipa
+
+  # ========================================================
+  # 4. CREATE RELEASE PAGE (UPDATED FOR BRANCH SUPPORT)
+  # ========================================================
+  create-release:
+    needs: [build-android-web-linux, build-windows, build-apple]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Display Files
+        run: ls -R
+
+      # Use the Short Commit Hash for naming if it's not a tag
+      - name: Get Short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts-linux/taptalk-android.apk
+            artifacts-linux/taptalk-web-wasm.zip
+            artifacts-linux/taptalk-linux.deb
+            artifacts-windows/taptalk-windows.exe
+            artifacts-apple/taptalk-mac.dmg
+            artifacts-apple/taptalk-ios-unsigned.ipa
+          
+          # If it's master, name it "master-a1b2c", otherwise use the Tag (v1.0)
+          tag_name: ${{ github.ref_name }}
+          name: "Tap Talk ${{ github.ref_name }} (${{ steps.vars.outputs.sha_short }})"
+          body: "Automated build from ${{ github.ref_name }} (Commit ${{ github.sha }})."
+          
+          # If it's the master branch, mark as Prerelease (Pre-release)
+          prerelease: ${{ github.ref == 'refs/heads/master' }}
+          draft: false
