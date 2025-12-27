@@ -1,14 +1,16 @@
-name: Build TapTalk (Android, Linux, Web)
+name: Build & Release TapTalk
 
 on:
   push:
     branches: [ "main", "master" ]
-    tags: [ 'v*' ] # Triggers release when you tag version (e.g., v1.0)
   workflow_dispatch:
+
+permissions:
+  contents: write # Required to create Releases
 
 jobs:
   # ---------------------------------------------------
-  # 1. ANDROID BUILD (Optimized & Split)
+  # 1. ANDROID BUILD
   # ---------------------------------------------------
   build-android:
     runs-on: ubuntu-latest
@@ -23,10 +25,9 @@ jobs:
           channel: 'stable'
       - run: flutter pub get
       
-      # Build Split APKs (Smallest possible size per phone)
       - run: flutter build apk --release --split-per-abi
       
-      # Rename for clarity
+      # Rename APKs
       - run: |
           mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk TapTalk-Android-arm64.apk
           mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk TapTalk-Android-armv7.apk
@@ -37,28 +38,23 @@ jobs:
           path: TapTalk-*.apk
 
   # ---------------------------------------------------
-  # 2. LINUX BUILD (With TTS Support)
+  # 2. LINUX BUILD
   # ---------------------------------------------------
   build-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      # Install standard Linux deps + ESPEAK (Required for flutter_tts)
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libespeak-ng-dev espeak-ng
-          
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-      
       - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
       
-      # Compress (Linux apps need the data folder next to the binary)
       - name: Compress Build
         run: tar -czvf TapTalk-Linux.tar.gz -C build/linux/x64/release/bundle .
         
@@ -68,7 +64,7 @@ jobs:
           path: TapTalk-Linux.tar.gz
 
   # ---------------------------------------------------
-  # 3. WEB BUILD (Optimized PWA)
+  # 3. WEB BUILD
   # ---------------------------------------------------
   build-web:
     runs-on: ubuntu-latest
@@ -78,9 +74,6 @@ jobs:
         with:
           channel: 'stable'
       - run: flutter pub get
-      
-      # Build using CanvasKit (Best performance) or HTML (Best compatibility)
-      # Auto usually selects the best one.
       - run: flutter build web --release
       
       - name: Compress Build
@@ -92,29 +85,39 @@ jobs:
           path: TapTalk-Web.zip
 
   # ---------------------------------------------------
-  # 4. CREATE RELEASE (Only on Tag)
+  # 4. AUTOMATIC RELEASE (Reads pubspec.yaml)
   # ---------------------------------------------------
   create-release:
     needs: [build-android, build-linux, build-web]
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      # THIS STEP EXTRACTS THE VERSION FROM PUBSPEC.YAML
+      - name: Get Version from Pubspec
+        id: get_version
+        run: |
+          # Read the version line, remove 'version: ', and remove whitespace
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          echo "Detected Version: $VERSION"
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+
       - name: Download all Artifacts
         uses: actions/download-artifact@v4
         with:
           path: all_artifacts
 
-      - name: Move artifacts to root for release
+      - name: Move artifacts to root
         run: |
           mv all_artifacts/TapTalk-Android/*.apk .
           mv all_artifacts/TapTalk-Linux/*.tar.gz .
           mv all_artifacts/TapTalk-Web/*.zip .
 
-      - name: Create GitHub Release
+      - name: Create or Update Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: v${{ env.APP_VERSION }} # Uses the version found in pubspec
+          name: Release v${{ env.APP_VERSION }}
           files: |
             *.apk
             *.tar.gz
