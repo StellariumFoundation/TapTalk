@@ -1,186 +1,37 @@
-name: "Tap Talk Release"
+name: Build Android APK
 
-# Trigger: Master branch commits OR Tags starting with v (e.g. v1.0.0)
 on:
   push:
-    branches:
-      - 'master'
-    tags:
-      - 'v*'
-
-permissions:
-  contents: write
+    branches: [ "master" ]
+  workflow_dispatch: # Allows you to trigger manually
 
 jobs:
-  # ========================================================
-  # 1. BUILD ANDROID (APK), WEB (WASM) & LINUX (DEB)
-  # ========================================================
-  build-android-web-linux:
+  build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '20'
+          java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      # [FIX 1] Fix Permissions for Linux/Mac
-      - name: Make Gradle Executable
-        run: chmod +x gradlew
-
-      # --- ANDROID ---
-      - name: Build Android APK
-        run: ./gradlew :composeApp:assembleDebug
-
-      - name: Rename APK
-        run: mv composeApp/build/outputs/apk/debug/composeApp-debug.apk taptalk-android.apk
-
-      # --- WEB (WASM) ---
-      - name: Build Web (Wasm)
-        run: ./gradlew :composeApp:wasmJsBrowserDistribution
-
-      - name: Zip Web Build
-        run: |
-          cd composeApp/build/dist/wasmJs/productionExecutable
-          zip -r ../../../../../taptalk-web-wasm.zip .
-
-      # --- LINUX DESKTOP ---
-      - name: Install Linux Deps
-        run: sudo apt-get update && sudo apt-get install -y binutils fakeroot
-
-      - name: Build Linux Deb
-        run: ./gradlew :composeApp:packageDistributionForCurrentOS
-
-      - name: Rename Linux Deb
-        run: mv composeApp/build/compose/binaries/main/deb/*.deb taptalk-linux.deb
-
-      # --- UPLOAD ARTIFACTS ---
-      - uses: actions/upload-artifact@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
-          name: artifacts-linux
-          path: |
-            taptalk-android.apk
-            taptalk-web-wasm.zip
-            taptalk-linux.deb
+          flutter-version: '3.19.0' # or 'stable'
+          channel: 'stable'
 
-  # ========================================================
-  # 2. BUILD WINDOWS (EXE)
-  # ========================================================
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          distribution: 'zulu'
-          java-version: '20'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      # [FIX 2] Use specific task for EXE to avoid MSI errors
-      - name: Build Windows Exe
-        run: ./gradlew :composeApp:packageReleaseExe
-
-      - name: Find and Move Exe
-        shell: bash
-        run: |
-          find composeApp/build/compose/binaries/main/exe -name "*.exe" -exec mv {} taptalk-windows.exe \;
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: artifacts-windows
-          path: taptalk-windows.exe
-
-  # ========================================================
-  # 3. BUILD MAC (DMG) & iOS (IPA)
-  # ========================================================
-  build-apple:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '20'
-      - uses: gradle/actions/setup-gradle@v3
-
-      # [FIX 1] Fix Permissions for Mac
-      - name: Make Gradle Executable
-        run: chmod +x gradlew
-
-      # --- MAC DESKTOP ---
-      - name: Build Mac DMG
-        run: ./gradlew :composeApp:packageDistributionForCurrentOS
-
-      - name: Move DMG
-        run: mv composeApp/build/compose/binaries/main/dmg/*.dmg taptalk-mac.dmg
-
-      # --- iOS (UNSIGNED) ---
-      # [FIX 3] Removed explicit "./gradlew :shared..." call. 
-      # Xcode calls Gradle automatically. Explicit call fails because "shared" module is gone.
-      - name: Build iOS App
-        run: |
-          xcodebuild -project iosApp/iosApp.xcodeproj \
-            -scheme iosApp \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -archivePath build/ios/TapTalk.xcarchive \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            clean archive
-
-      - name: Package iOS IPA
-        run: |
-          mkdir -p Payload
-          cp -r build/ios/TapTalk.xcarchive/Products/Applications/iosApp.app Payload/
-          zip -r taptalk-ios-unsigned.ipa Payload
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: artifacts-apple
-          path: |
-            taptalk-mac.dmg
-            taptalk-ios-unsigned.ipa
-
-  # ========================================================
-  # 4. CREATE RELEASE PAGE
-  # ========================================================
-  create-release:
-    needs: [build-android-web-linux, build-windows, build-apple]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Display Files
-        run: ls -R
-
-      - name: Get Short SHA
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            artifacts-linux/taptalk-android.apk
-            artifacts-linux/taptalk-web-wasm.zip
-            artifacts-linux/taptalk-linux.deb
-            artifacts-windows/taptalk-windows.exe
-            artifacts-apple/taptalk-mac.dmg
-            artifacts-apple/taptalk-ios-unsigned.ipa
-          
-          # Naming Logic
-          tag_name: ${{ github.ref_name }}
-          name: "Tap Talk ${{ github.ref_name }} (${{ steps.vars.outputs.sha_short }})"
-          body: "Automated build from ${{ github.ref_name }} (Commit ${{ github.sha }})."
-          
-          # Prerelease if master, Stable if tag
-          prerelease: ${{ github.ref == 'refs/heads/master' }}
-          draft: false
+          name: app-release
+          path: build/app/outputs/flutter-apk/app-release.apk
