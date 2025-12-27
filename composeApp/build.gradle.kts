@@ -11,7 +11,10 @@ plugins {
 }
 
 kotlin {
-    // 1. FIX: Use new compilerOptions syntax (Required for Kotlin 2.0+)
+    // 1. FIX: Enable Default Hierarchy (Handles iosMain -> commonMain automatically)
+    // This removes the need for the manual wiring that was failing on line 84.
+    applyDefaultHierarchyTemplate()
+
     androidTarget {
         @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
         compilerOptions {
@@ -19,7 +22,6 @@ kotlin {
         }
     }
 
-    // 2. FIX: Add iOS Targets (Required for the 'build-apple' CI job)
     listOf(
         iosX64(),
         iosArm64(),
@@ -76,16 +78,8 @@ kotlin {
             implementation(libs.kotlinx.coroutinesSwing)
         }
         
-        // Setup a shared scope for iOS if needed later
-        val iosX64Main by getting
-        val iosArm64Main by getting
-        val iosSimulatorArm64Main by getting
-        val iosMain by creating {
-            dependsOn(commonMain)
-            iosX64Main.dependsOn(this)
-            iosArm64Main.dependsOn(this)
-            iosSimulatorArm64Main.dependsOn(this)
-        }
+        // 2. FIX: Removed manual 'iosMain' wiring. 
+        // 'applyDefaultHierarchyTemplate()' at the top handles this automatically now.
     }
 }
 
@@ -125,15 +119,13 @@ compose.desktop {
         mainClass = "com.jv.taptalk.MainKt"
 
         nativeDistributions {
-            // 3. FIX: Use 'Exe' instead of 'Msi' for Windows (MSI often fails in CI)
             targetFormats(TargetFormat.Dmg, TargetFormat.Exe, TargetFormat.Deb)
             packageName = "TapTalk"
             packageVersion = "1.0.0"
             
-            // Required config for Windows Exe build
             windows {
                 menu = true
-                upgradeUuid = "9449856f-8292-4952-b918-68b57743d810" // Random fixed UUID
+                upgradeUuid = "9449856f-8292-4952-b918-68b57743d810"
             }
         }
     }
