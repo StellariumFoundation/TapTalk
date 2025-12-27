@@ -20,7 +20,7 @@ class TapTalkApp extends StatelessWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: Colors.transparent, // Important for background gradient
         useMaterial3: true,
-        fontFamily: 'Roboto', // Or standard system font
+        fontFamily: 'Roboto', 
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF6C63FF), // Purple Accent
           secondary: Color(0xFF00BFA6), // Teal Accent
@@ -102,7 +102,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (voiceJson != null) {
       try {
         Map<String, dynamic> voiceMap = jsonDecode(voiceJson);
-        await flutterTts.setVoice(voiceMap);
+        // FIX 1: Convert Map<String, dynamic> to Map<String, String>
+        await flutterTts.setVoice(Map<String, String>.from(voiceMap));
       } catch (e) {
         print("Error loading voice: $e");
       }
@@ -353,7 +354,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setString('language', _language);
     if (_selectedVoice != null) {
       await prefs.setString('voice', jsonEncode(_selectedVoice));
-      await widget.tts.setVoice(_selectedVoice!);
+      // FIX 2: Convert Map<String, dynamic> to Map<String, String>
+      await widget.tts.setVoice(Map<String, String>.from(_selectedVoice!));
     }
     await widget.tts.setPitch(_pitch);
     await widget.tts.setSpeechRate(_rate);
@@ -504,12 +506,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0, left: 5),
       child: Text(
-        title, 
+        // FIX 3: Removed invalid 'uppercase: true' parameter and used .toUpperCase()
+        title.toUpperCase(), 
         style: const TextStyle(
           color: Colors.white70, 
           fontSize: 14, 
           fontWeight: FontWeight.bold,
-          uppercase: true,
           letterSpacing: 1.0,
         ),
       ),
