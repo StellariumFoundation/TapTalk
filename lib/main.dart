@@ -15,18 +15,16 @@ class TapTalkApp extends StatelessWidget {
     return MaterialApp(
       title: 'TapTalk',
       debugShowCheckedModeBanner: false,
-      // Define a Global Dark Theme
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: Colors.transparent, // Important for background gradient
+        scaffoldBackgroundColor: Colors.transparent,
         useMaterial3: true,
-        fontFamily: 'Roboto', 
+        fontFamily: 'Roboto',
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF6C63FF), // Purple Accent
-          secondary: Color(0xFF00BFA6), // Teal Accent
-          surface: Color(0xFF1E1E2C), // Dark Card Color
+          primary: Color(0xFF6C63FF),
+          secondary: Color(0xFF00BFA6),
+          surface: Color(0xFF1E1E2C),
         ),
-        // Style the input fields globally
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: const Color(0xFF2D2D44),
@@ -43,7 +41,7 @@ class TapTalkApp extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// GLOBAL WIDGET: GRADIENT BACKGROUND
+// GRADIENT BACKGROUND
 // ---------------------------------------------------------------------------
 class GradientBackground extends StatelessWidget {
   final Widget child;
@@ -57,7 +55,7 @@ class GradientBackground extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            Color(0xFF1A1A2E), // Dark Navy/Gray
+            Color(0xFF1A1A2E), // Dark Navy
             Color(0xFF16213E), // Deep Blue
             Color(0xFF240046), // Deep Purple
           ],
@@ -82,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final FlutterTts flutterTts = FlutterTts();
   final TextEditingController _textController = TextEditingController();
   
-  List<String> phrases = ["Hello!", "Thank you", "Yes", "No", "Help", "Water"];
+  List<String> phrases = [];
 
   @override
   void initState() {
@@ -90,40 +88,56 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadAllData();
   }
 
+  // Helper to fix the crash with Map types
+  Map<String, String> _safeVoiceMap(Map<dynamic, dynamic> voice) {
+    final Map<String, String> safeMap = {};
+    voice.forEach((key, value) {
+      safeMap[key.toString()] = value.toString();
+    });
+    return safeMap;
+  }
+
   Future<void> _loadAllData() async {
     final prefs = await SharedPreferences.getInstance();
-    
-    // Load Voice Settings
-    double pitch = prefs.getDouble('pitch') ?? 1.0;
-    double rate = prefs.getDouble('rate') ?? 0.5;
-    String? language = prefs.getString('language') ?? "en-US";
-    String? voiceJson = prefs.getString('voice');
 
-    if (voiceJson != null) {
-      try {
-        Map<String, dynamic> voiceMap = jsonDecode(voiceJson);
-        // FIX 1: Convert Map<String, dynamic> to Map<String, String>
-        await flutterTts.setVoice(Map<String, String>.from(voiceMap));
-      } catch (e) {
-        print("Error loading voice: $e");
-      }
-    }
-
-    await flutterTts.setPitch(pitch);
-    await flutterTts.setSpeechRate(rate);
-    await flutterTts.setLanguage(language);
-    await flutterTts.setIosAudioCategory(
-        IosTextToSpeechAudioCategory.playback,
-        [
-          IosTextToSpeechAudioCategoryOptions.defaultToSpeaker,
-          IosTextToSpeechAudioCategoryOptions.allowBluetooth,
-        ],
-    );
-
-    // Load Phrases
+    // ---------------------------------------------------------
+    // 1. LOAD PHRASES FIRST (Priority)
+    // ---------------------------------------------------------
+    // We load this first so even if TTS fails, your data is safe.
     List<String>? savedPhrases = prefs.getStringList('saved_phrases');
     if (savedPhrases != null) {
       setState(() => phrases = savedPhrases);
+    }
+
+    // ---------------------------------------------------------
+    // 2. LOAD VOICE SETTINGS
+    // ---------------------------------------------------------
+    try {
+      double pitch = prefs.getDouble('pitch') ?? 1.0;
+      double rate = prefs.getDouble('rate') ?? 0.5;
+      String? language = prefs.getString('language') ?? "en-US";
+      String? voiceJson = prefs.getString('voice');
+
+      await flutterTts.setPitch(pitch);
+      await flutterTts.setSpeechRate(rate);
+      await flutterTts.setLanguage(language);
+
+      if (voiceJson != null) {
+        Map<String, dynamic> voiceMap = jsonDecode(voiceJson);
+        await flutterTts.setVoice(_safeVoiceMap(voiceMap));
+      }
+
+      // iOS Audio Setup
+      await flutterTts.setIosAudioCategory(
+          IosTextToSpeechAudioCategory.playback,
+          [
+            IosTextToSpeechAudioCategoryOptions.defaultToSpeaker,
+            IosTextToSpeechAudioCategoryOptions.allowBluetooth,
+          ],
+      );
+    } catch (e) {
+      print("Error loading voice settings: $e");
+      // App continues running even if voice loading fails
     }
   }
 
@@ -136,25 +150,25 @@ class _HomeScreenState extends State<HomeScreen> {
     await flutterTts.speak(text);
   }
 
-  void _addPhrase(String text) {
+  void _addPhrase(String text) async {
     if (text.isNotEmpty) {
       setState(() => phrases.add(text));
-      _savePhrases();
+      await _savePhrases(); // Wait for save
       _textController.clear();
-      Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop();
     }
   }
 
-  void _deletePhrase(int index) {
+  void _deletePhrase(int index) async {
     setState(() => phrases.removeAt(index));
-    _savePhrases();
+    await _savePhrases(); // Wait for save
   }
 
   void _showAddDialog() {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF252540), // Darker Dialog
+        backgroundColor: const Color(0xFF252540),
         title: const Text("New Phrase", style: TextStyle(color: Colors.white)),
         content: TextField(
           controller: _textController,
@@ -190,7 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return GradientBackground(
       child: Scaffold(
-        backgroundColor: Colors.transparent, // Transparent to show gradient
+        backgroundColor: Colors.transparent,
         appBar: AppBar(
           title: const Text("TapTalk", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
           centerTitle: true,
@@ -214,7 +228,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             itemCount: phrases.length,
             itemBuilder: (context, index) {
-              // Custom Gradient Card
               return Container(
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
@@ -265,7 +278,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: _showAddDialog,
-          backgroundColor: const Color(0xFF00BFA6), // Teal accent
+          backgroundColor: const Color(0xFF00BFA6),
           label: const Text("Add Phrase", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           icon: const Icon(Icons.add, color: Colors.white),
         ),
@@ -300,10 +313,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _initSettings();
   }
 
+  Map<String, String> _safeVoiceMap(Map<dynamic, dynamic> voice) {
+    final Map<String, String> safeMap = {};
+    voice.forEach((key, value) {
+      safeMap[key.toString()] = value.toString();
+    });
+    return safeMap;
+  }
+
   Future<void> _initSettings() async {
     final prefs = await SharedPreferences.getInstance();
     
+    // Get languages
     var langs = await widget.tts.getLanguages;
+    
+    // Get voices
     var rawVoices = await widget.tts.getVoices;
     List<Map<String, dynamic>> parsedVoices = [];
     if (rawVoices != null) {
@@ -320,18 +344,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
       } catch (e) { /* ignore */ }
     }
 
-    setState(() {
-      _languages = List<String>.from(langs);
-      _voices = parsedVoices;
-      _pitch = prefs.getDouble('pitch') ?? 1.0;
-      _rate = prefs.getDouble('rate') ?? 0.5;
-      _language = prefs.getString('language') ?? "en-US";
-      _selectedVoice = loadedVoice;
-      _filterVoices();
-    });
+    double savedPitch = prefs.getDouble('pitch') ?? 1.0;
+    double savedRate = prefs.getDouble('rate') ?? 0.5;
+    String savedLang = prefs.getString('language') ?? "en-US";
+
+    if (mounted) {
+      setState(() {
+        _languages = List<String>.from(langs);
+        _voices = parsedVoices;
+        _pitch = savedPitch;
+        _rate = savedRate;
+        _language = savedLang;
+        _selectedVoice = loadedVoice;
+        _filterVoices();
+      });
+    }
   }
 
   void _filterVoices() {
+    if (!mounted) return;
     setState(() {
       _filteredVoices = _voices.where((voice) {
         String locale = voice['locale'].toString();
@@ -349,17 +380,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    
     await prefs.setDouble('pitch', _pitch);
     await prefs.setDouble('rate', _rate);
     await prefs.setString('language', _language);
+    
     if (_selectedVoice != null) {
       await prefs.setString('voice', jsonEncode(_selectedVoice));
-      // FIX 2: Convert Map<String, dynamic> to Map<String, String>
-      await widget.tts.setVoice(Map<String, String>.from(_selectedVoice!));
+      await widget.tts.setVoice(_safeVoiceMap(_selectedVoice!));
     }
+    
     await widget.tts.setPitch(_pitch);
     await widget.tts.setSpeechRate(_rate);
     await widget.tts.setLanguage(_language);
+  }
+
+  Future<void> _testConfiguration() async {
+    await _saveSettings();
+    await widget.tts.speak("Hello, this is my new voice.");
   }
 
   @override
@@ -379,13 +417,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildSectionTitle("Language"),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2D2D44),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: DropdownButtonHideUnderline(
+                _buildContainer(
+                  DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       isExpanded: true,
                       dropdownColor: const Color(0xFF2D2D44),
@@ -413,13 +446,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 20),
           
                 _buildSectionTitle("Specific Voice"),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2D2D44),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: DropdownButtonHideUnderline(
+                _buildContainer(
+                  DropdownButtonHideUnderline(
                     child: DropdownButton<Map<String, dynamic>>(
                       isExpanded: true,
                       dropdownColor: const Color(0xFF2D2D44),
@@ -444,40 +472,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 20),
           
                 _buildSectionTitle("Speed: ${_rate.toStringAsFixed(1)}"),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: const Color(0xFF6C63FF),
-                    thumbColor: const Color(0xFF00BFA6),
-                  ),
-                  child: Slider(
-                    value: _rate,
-                    min: 0.0,
-                    max: 1.0,
-                    divisions: 10,
-                    onChanged: (val) {
-                      setState(() => _rate = val);
-                      _saveSettings();
-                    },
-                  ),
-                ),
+                _buildSlider(_rate, 0.0, 1.0, (val) {
+                   setState(() => _rate = val);
+                   _saveSettings();
+                }),
                 
                 _buildSectionTitle("Pitch: ${_pitch.toStringAsFixed(1)}"),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: const Color(0xFF6C63FF),
-                    thumbColor: const Color(0xFF00BFA6),
-                  ),
-                  child: Slider(
-                    value: _pitch,
-                    min: 0.5,
-                    max: 2.0,
-                    divisions: 15,
-                    onChanged: (val) {
-                      setState(() => _pitch = val);
-                      _saveSettings();
-                    },
-                  ),
-                ),
+                _buildSlider(_pitch, 0.5, 2.0, (val) {
+                   setState(() => _pitch = val);
+                   _saveSettings();
+                }),
           
                 const SizedBox(height: 40),
                 SizedBox(
@@ -489,7 +493,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    onPressed: () => widget.tts.speak("Hello, this is my new voice."),
+                    onPressed: _testConfiguration,
                     icon: const Icon(Icons.volume_up),
                     label: const Text("TEST CONFIGURATION", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   ),
@@ -506,7 +510,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0, left: 5),
       child: Text(
-        // FIX 3: Removed invalid 'uppercase: true' parameter and used .toUpperCase()
         title.toUpperCase(), 
         style: const TextStyle(
           color: Colors.white70, 
@@ -514,6 +517,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
           fontWeight: FontWeight.bold,
           letterSpacing: 1.0,
         ),
+      ),
+    );
+  }
+
+  Widget _buildContainer(Widget child) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2D2D44),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildSlider(double value, double min, double max, Function(double) onChanged) {
+    return SliderTheme(
+      data: SliderTheme.of(context).copyWith(
+        activeTrackColor: const Color(0xFF6C63FF),
+        thumbColor: const Color(0xFF00BFA6),
+      ),
+      child: Slider(
+        value: value,
+        min: min,
+        max: max,
+        divisions: 15,
+        onChanged: onChanged,
       ),
     );
   }
