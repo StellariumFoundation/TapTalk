@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   # ---------------------------------------------------
-  # 1. ANDROID BUILD
+  # 1. ANDROID BUILD (Universal + Splits)
   # ---------------------------------------------------
   build-android:
     runs-on: ubuntu-latest
@@ -24,17 +24,30 @@ jobs:
         with:
           channel: 'stable'
       - run: flutter pub get
+
+      # 1. Build UNIVERSAL APK (Fat APK for all devices)
+      - name: Build Universal APK
+        run: flutter build apk --release
       
-      - run: flutter build apk --release --split-per-abi
-      
-      # Rename APKs
-      - run: |
+      # Move it immediately so the next build doesn't delete it
+      - name: Rename Universal APK
+        run: mv build/app/outputs/flutter-apk/app-release.apk TapTalk-Universal.apk
+
+      # 2. Build SPLIT APKs (arm64, armv7, x86_64)
+      - name: Build Split APKs
+        run: flutter build apk --release --split-per-abi
+
+      # Rename the split files to readable names
+      - name: Rename Split APKs
+        run: |
           mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk TapTalk-Android-arm64.apk
           mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk TapTalk-Android-armv7.apk
-      
+          mv build/app/outputs/flutter-apk/app-x86_64-release.apk TapTalk-Android-x86.apk
+
+      # Upload ALL of them
       - uses: actions/upload-artifact@v4
         with:
-          name: TapTalk-Android
+          name: TapTalk-Android-All
           path: TapTalk-*.apk
 
   # ---------------------------------------------------
@@ -85,7 +98,7 @@ jobs:
           path: TapTalk-Web.zip
 
   # ---------------------------------------------------
-  # 4. AUTOMATIC RELEASE (Reads pubspec.yaml)
+  # 4. AUTOMATIC RELEASE
   # ---------------------------------------------------
   create-release:
     needs: [build-android, build-linux, build-web]
@@ -93,11 +106,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # THIS STEP EXTRACTS THE VERSION FROM PUBSPEC.YAML
       - name: Get Version from Pubspec
         id: get_version
         run: |
-          # Read the version line, remove 'version: ', and remove whitespace
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
           echo "Detected Version: $VERSION"
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
@@ -109,14 +120,14 @@ jobs:
 
       - name: Move artifacts to root
         run: |
-          mv all_artifacts/TapTalk-Android/*.apk .
+          mv all_artifacts/TapTalk-Android-All/*.apk .
           mv all_artifacts/TapTalk-Linux/*.tar.gz .
           mv all_artifacts/TapTalk-Web/*.zip .
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ env.APP_VERSION }} # Uses the version found in pubspec
+          tag_name: v${{ env.APP_VERSION }}
           name: Release v${{ env.APP_VERSION }}
           files: |
             *.apk

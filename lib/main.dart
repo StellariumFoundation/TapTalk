@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -33,6 +34,7 @@ class TapTalkApp extends StatelessWidget {
             borderSide: BorderSide.none,
           ),
           hintStyle: const TextStyle(color: Colors.grey),
+          counterStyle: const TextStyle(color: Colors.grey),
         ),
       ),
       home: const HomeScreen(),
@@ -80,7 +82,11 @@ class _HomeScreenState extends State<HomeScreen> {
   final FlutterTts flutterTts = FlutterTts();
   final TextEditingController _textController = TextEditingController();
   
+  // State variables
   List<String> phrases = [];
+  bool _isLoopMode = false; // Controls if we repeat
+  bool _isPlaying = false;  // Controls the Stop button visibility
+  String? _currentPhrase;   // Tracks what is currently playing
 
   @override
   void initState() {
@@ -100,23 +106,22 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadAllData() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // ---------------------------------------------------------
-    // 1. LOAD PHRASES FIRST (Priority)
-    // ---------------------------------------------------------
-    // We load this first so even if TTS fails, your data is safe.
+    // 1. Load Phrases (Cache)
     List<String>? savedPhrases = prefs.getStringList('saved_phrases');
     if (savedPhrases != null) {
       setState(() => phrases = savedPhrases);
     }
 
-    // ---------------------------------------------------------
-    // 2. LOAD VOICE SETTINGS
-    // ---------------------------------------------------------
+    // 2. Load Voice Settings
     try {
       double pitch = prefs.getDouble('pitch') ?? 1.0;
       double rate = prefs.getDouble('rate') ?? 0.5;
       String? language = prefs.getString('language') ?? "en-US";
       String? voiceJson = prefs.getString('voice');
+
+      // CRITICAL FOR CHUNKING/LOOPING: 
+      // This makes the app wait for one chunk to finish before sending the next.
+      await flutterTts.awaitSpeakCompletion(true);
 
       await flutterTts.setPitch(pitch);
       await flutterTts.setSpeechRate(rate);
@@ -127,7 +132,6 @@ class _HomeScreenState extends State<HomeScreen> {
         await flutterTts.setVoice(_safeVoiceMap(voiceMap));
       }
 
-      // iOS Audio Setup
       await flutterTts.setIosAudioCategory(
           IosTextToSpeechAudioCategory.playback,
           [
@@ -136,8 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
       );
     } catch (e) {
-      print("Error loading voice settings: $e");
-      // App continues running even if voice loading fails
+      print("Error loading settings: $e");
     }
   }
 
@@ -146,14 +149,72 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setStringList('saved_phrases', phrases);
   }
 
-  Future<void> _speak(String text) async {
-    await flutterTts.speak(text);
+  // -------------------------------------------------------------------------
+  // CORE LOGIC: CHUNKING & LOOPING
+  // -------------------------------------------------------------------------
+
+  Future<void> _stopSpeaking() async {
+    await flutterTts.stop();
+    setState(() {
+      _isPlaying = false;
+      _currentPhrase = null;
+    });
   }
+
+  Future<void> _processText(String text) async {
+    // 1. Stop anything currently playing
+    await flutterTts.stop();
+    
+    setState(() {
+      _isPlaying = true;
+      _currentPhrase = text;
+    });
+
+    // 2. Clean text
+    String cleanText = text.replaceAll("\n", " ");
+    int length = cleanText.length;
+    int chunkSize = 2000;
+
+    // 3. Loop Logic
+    do {
+      int start = 0;
+      
+      // 4. Chunking Logic
+      while (start < length) {
+        // Check if user pressed stop during the loop
+        if (!_isPlaying || _currentPhrase != text) return;
+
+        int end = start + chunkSize;
+        if (end > length) end = length;
+        
+        String chunk = cleanText.substring(start, end);
+        
+        // Speak and WAIT for it to finish (thanks to awaitSpeakCompletion)
+        await flutterTts.speak(chunk);
+        
+        start += chunkSize;
+      }
+
+      // If not in loop mode, break after one full read-through
+      if (!_isLoopMode) break;
+
+    } while (_isPlaying && _isLoopMode && _currentPhrase == text);
+
+    // Reset state when done
+    if (_currentPhrase == text) {
+      setState(() {
+        _isPlaying = false;
+        _currentPhrase = null;
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
 
   void _addPhrase(String text) async {
     if (text.isNotEmpty) {
       setState(() => phrases.add(text));
-      await _savePhrases(); // Wait for save
+      await _savePhrases(); 
       _textController.clear();
       if (mounted) Navigator.of(context).pop();
     }
@@ -161,7 +222,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _deletePhrase(int index) async {
     setState(() => phrases.removeAt(index));
-    await _savePhrases(); // Wait for save
+    await _savePhrases(); 
   }
 
   void _showAddDialog() {
@@ -175,6 +236,9 @@ class _HomeScreenState extends State<HomeScreen> {
           autofocus: true,
           style: const TextStyle(color: Colors.white),
           textCapitalization: TextCapitalization.sentences,
+          maxLines: 5,
+          minLines: 1,
+          maxLength: 10000, // Increased limit since we now support chunking
           decoration: const InputDecoration(hintText: "What do you want to say?"),
         ),
         actions: [
@@ -211,6 +275,19 @@ class _HomeScreenState extends State<HomeScreen> {
           backgroundColor: Colors.transparent,
           elevation: 0,
           actions: [
+            // LOOP TOGGLE BUTTON
+            IconButton(
+              tooltip: "Loop Mode: ${_isLoopMode ? 'ON' : 'OFF'}",
+              icon: Icon(
+                Icons.repeat, 
+                color: _isLoopMode ? const Color(0xFF00BFA6) : Colors.white38
+              ),
+              onPressed: () {
+                setState(() => _isLoopMode = !_isLoopMode);
+                // If we turn off loop while playing, stop immediately or let it finish?
+                // Let's let it finish the current run.
+              },
+            ),
             IconButton(
               icon: const Icon(Icons.settings, color: Colors.white70),
               onPressed: _openSettings,
@@ -251,7 +328,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: Colors.transparent,
                   child: InkWell(
                     borderRadius: BorderRadius.circular(24),
-                    onTap: () => _speak(phrases[index]),
+                    onTap: () => _processText(phrases[index]),
                     onLongPress: () => _deletePhrase(index),
                     child: Center(
                       child: Padding(
@@ -259,8 +336,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Text(
                           phrases[index],
                           textAlign: TextAlign.center,
+                          maxLines: 4, 
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            fontSize: 20,
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
                             shadows: [
@@ -276,11 +355,19 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
         ),
+        // FLOATING ACTION BUTTON
+        // Shows STOP if playing, ADD if idle
         floatingActionButton: FloatingActionButton.extended(
-          onPressed: _showAddDialog,
-          backgroundColor: const Color(0xFF00BFA6),
-          label: const Text("Add Phrase", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          icon: const Icon(Icons.add, color: Colors.white),
+          onPressed: _isPlaying ? _stopSpeaking : _showAddDialog,
+          backgroundColor: _isPlaying ? Colors.redAccent : const Color(0xFF00BFA6),
+          label: Text(
+            _isPlaying ? "STOP" : "Add Phrase",
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
+          ),
+          icon: Icon(
+            _isPlaying ? Icons.stop : Icons.add,
+            color: Colors.white
+          ),
         ),
       ),
     );
@@ -288,7 +375,7 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // ---------------------------------------------------------------------------
-// SETTINGS SCREEN
+// SETTINGS SCREEN (Unchanged)
 // ---------------------------------------------------------------------------
 class SettingsScreen extends StatefulWidget {
   final FlutterTts tts;
@@ -324,10 +411,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _initSettings() async {
     final prefs = await SharedPreferences.getInstance();
     
-    // Get languages
     var langs = await widget.tts.getLanguages;
-    
-    // Get voices
     var rawVoices = await widget.tts.getVoices;
     List<Map<String, dynamic>> parsedVoices = [];
     if (rawVoices != null) {
@@ -380,7 +464,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    
     await prefs.setDouble('pitch', _pitch);
     await prefs.setDouble('rate', _rate);
     await prefs.setString('language', _language);
