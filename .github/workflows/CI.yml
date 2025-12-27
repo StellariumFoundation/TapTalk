@@ -1,14 +1,14 @@
-name: Build TapTalk Multi-Platform
+name: Build TapTalk (Android, Linux, Web)
 
 on:
   push:
     branches: [ "main", "master" ]
-    tags: [ 'v*' ] # Triggers release when you push a tag like v1.0
+    tags: [ 'v*' ] # Triggers release when you tag version (e.g., v1.0)
   workflow_dispatch:
 
 jobs:
   # ---------------------------------------------------
-  # 1. ANDROID BUILD
+  # 1. ANDROID BUILD (Optimized & Split)
   # ---------------------------------------------------
   build-android:
     runs-on: ubuntu-latest
@@ -23,10 +23,10 @@ jobs:
           channel: 'stable'
       - run: flutter pub get
       
-      # Highly optimized build
+      # Build Split APKs (Smallest possible size per phone)
       - run: flutter build apk --release --split-per-abi
       
-      # Rename APKs to include app name
+      # Rename for clarity
       - run: |
           mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk TapTalk-Android-arm64.apk
           mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk TapTalk-Android-armv7.apk
@@ -37,46 +37,28 @@ jobs:
           path: TapTalk-*.apk
 
   # ---------------------------------------------------
-  # 2. WINDOWS BUILD
-  # ---------------------------------------------------
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-      - run: flutter config --enable-windows-desktop
-      - run: flutter pub get
-      - run: flutter build windows --release
-      
-      # Windows requires zipping the folder to distribute
-      - name: Compress Build
-        run: compress-archive -Path build\windows\x64\runner\Release\* -DestinationPath TapTalk-Windows.zip
-        
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TapTalk-Windows
-          path: TapTalk-Windows.zip
-
-  # ---------------------------------------------------
-  # 3. LINUX BUILD
+  # 2. LINUX BUILD (With TTS Support)
   # ---------------------------------------------------
   build-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
+      # Install standard Linux deps + ESPEAK (Required for flutter_tts)
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libespeak-ng-dev espeak-ng
+          
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+      
       - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
       
+      # Compress (Linux apps need the data folder next to the binary)
       - name: Compress Build
         run: tar -czvf TapTalk-Linux.tar.gz -C build/linux/x64/release/bundle .
         
@@ -86,30 +68,7 @@ jobs:
           path: TapTalk-Linux.tar.gz
 
   # ---------------------------------------------------
-  # 4. MACOS BUILD
-  # ---------------------------------------------------
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-      - run: flutter config --enable-macos-desktop
-      - run: flutter pub get
-      - run: flutter build macos --release
-      
-      # Create a simple DMG or Zip (Zip is easier for now)
-      - name: Compress Build
-        run: ditto -c -k --sequesterRsrc --keepParent build/macos/Build/Products/Release/TapTalk.app TapTalk-macOS.zip
-        
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TapTalk-macOS
-          path: TapTalk-macOS.zip
-
-  # ---------------------------------------------------
-  # 5. WEB BUILD
+  # 3. WEB BUILD (Optimized PWA)
   # ---------------------------------------------------
   build-web:
     runs-on: ubuntu-latest
@@ -119,6 +78,9 @@ jobs:
         with:
           channel: 'stable'
       - run: flutter pub get
+      
+      # Build using CanvasKit (Best performance) or HTML (Best compatibility)
+      # Auto usually selects the best one.
       - run: flutter build web --release
       
       - name: Compress Build
@@ -130,10 +92,10 @@ jobs:
           path: TapTalk-Web.zip
 
   # ---------------------------------------------------
-  # 6. CREATE RELEASE (Only on Tag)
+  # 4. CREATE RELEASE (Only on Tag)
   # ---------------------------------------------------
   create-release:
-    needs: [build-android, build-windows, build-linux, build-macos, build-web]
+    needs: [build-android, build-linux, build-web]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -147,9 +109,7 @@ jobs:
       - name: Move artifacts to root for release
         run: |
           mv all_artifacts/TapTalk-Android/*.apk .
-          mv all_artifacts/TapTalk-Windows/*.zip .
           mv all_artifacts/TapTalk-Linux/*.tar.gz .
-          mv all_artifacts/TapTalk-macOS/*.zip .
           mv all_artifacts/TapTalk-Web/*.zip .
 
       - name: Create GitHub Release
@@ -157,7 +117,7 @@ jobs:
         with:
           files: |
             *.apk
-            *.zip
             *.tar.gz
+            *.zip
           draft: false
           prerelease: false
