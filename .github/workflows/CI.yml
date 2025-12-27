@@ -1,6 +1,6 @@
 name: "Tap Talk Release"
 
-# TRIGGER CHANGE: Runs on 'master' branch commits AND 'v*' tags
+# Trigger: Master branch commits OR Tags starting with v (e.g. v1.0.0)
 on:
   push:
     branches:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   # ========================================================
-  # 1. BUILD ANDROID (APK) & WEB (WASM) & LINUX (DEB)
+  # 1. BUILD ANDROID (APK), WEB (WASM) & LINUX (DEB)
   # ========================================================
   build-android-web-linux:
     runs-on: ubuntu-latest
@@ -26,6 +26,10 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+
+      # [FIX 1] Fix Permissions for Linux/Mac
+      - name: Make Gradle Executable
+        run: chmod +x gradlew
 
       # --- ANDROID ---
       - name: Build Android APK
@@ -77,8 +81,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      # [FIX 2] Use specific task for EXE to avoid MSI errors
       - name: Build Windows Exe
-        run: ./gradlew :composeApp:packageDistributionForCurrentOS
+        run: ./gradlew :composeApp:packageReleaseExe
 
       - name: Find and Move Exe
         shell: bash
@@ -103,6 +108,10 @@ jobs:
           java-version: '20'
       - uses: gradle/actions/setup-gradle@v3
 
+      # [FIX 1] Fix Permissions for Mac
+      - name: Make Gradle Executable
+        run: chmod +x gradlew
+
       # --- MAC DESKTOP ---
       - name: Build Mac DMG
         run: ./gradlew :composeApp:packageDistributionForCurrentOS
@@ -111,9 +120,10 @@ jobs:
         run: mv composeApp/build/compose/binaries/main/dmg/*.dmg taptalk-mac.dmg
 
       # --- iOS (UNSIGNED) ---
+      # [FIX 3] Removed explicit "./gradlew :shared..." call. 
+      # Xcode calls Gradle automatically. Explicit call fails because "shared" module is gone.
       - name: Build iOS App
         run: |
-          ./gradlew :shared:linkReleaseFrameworkIosArm64
           xcodebuild -project iosApp/iosApp.xcodeproj \
             -scheme iosApp \
             -configuration Release \
@@ -139,7 +149,7 @@ jobs:
             taptalk-ios-unsigned.ipa
 
   # ========================================================
-  # 4. CREATE RELEASE PAGE (UPDATED FOR BRANCH SUPPORT)
+  # 4. CREATE RELEASE PAGE
   # ========================================================
   create-release:
     needs: [build-android-web-linux, build-windows, build-apple]
@@ -151,7 +161,6 @@ jobs:
       - name: Display Files
         run: ls -R
 
-      # Use the Short Commit Hash for naming if it's not a tag
       - name: Get Short SHA
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
@@ -167,11 +176,11 @@ jobs:
             artifacts-apple/taptalk-mac.dmg
             artifacts-apple/taptalk-ios-unsigned.ipa
           
-          # If it's master, name it "master-a1b2c", otherwise use the Tag (v1.0)
+          # Naming Logic
           tag_name: ${{ github.ref_name }}
           name: "Tap Talk ${{ github.ref_name }} (${{ steps.vars.outputs.sha_short }})"
           body: "Automated build from ${{ github.ref_name }} (Commit ${{ github.sha }})."
           
-          # If it's the master branch, mark as Prerelease (Pre-release)
+          # Prerelease if master, Stable if tag
           prerelease: ${{ github.ref == 'refs/heads/master' }}
           draft: false
